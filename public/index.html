@@ -234,6 +234,7 @@
           <div class="price-mode-tabs price-formula-control" role="tablist" data-i18n-aria-label="pricing.customerPricing">
             <button id="price-customer-unit-tab" class="price-mode-tab active" data-price-kind="customer" data-price-mode="UNIT" role="tab" aria-selected="true" aria-controls="price-customer-unit-panel" type="button" data-i18n="pricing.unitPricing">按用量单价</button>
             <button id="price-customer-formula-tab" class="price-mode-tab" data-price-kind="customer" data-price-mode="FORMULA" role="tab" aria-selected="false" aria-controls="price-customer-formula-panel" tabindex="-1" type="button" data-i18n="pricing.formulaPricing">按 BillingContext 公式</button>
+            <button id="price-customer-tier-tab" class="price-mode-tab token-tier-tab hidden" data-price-kind="customer" data-price-mode="TOKEN_TIER" role="tab" aria-selected="false" aria-controls="price-customer-tier-panel" tabindex="-1" type="button" data-i18n="pricing.tokenTierPricing">Token 分档</button>
           </div>
           <div id="price-customer-unit-panel" class="price-mode-panel" role="tabpanel" aria-labelledby="price-customer-unit-tab">
             <label><span data-i18n="pricing.customerUnitPrice">客户单价</span><input name="customerUnitPrice" required inputmode="decimal" step="0.0000000001" value="0"></label>
@@ -241,18 +242,29 @@
           <div id="price-customer-formula-panel" class="price-mode-panel hidden" role="tabpanel" aria-labelledby="price-customer-formula-tab">
             <label><span data-i18n="pricing.customerFormula">客户计价公式</span><textarea name="customerPriceFormula" maxlength="2000" rows="3" spellcheck="false"></textarea></label>
           </div>
+          <div id="price-customer-tier-panel" class="price-mode-panel hidden" role="tabpanel" aria-labelledby="price-customer-tier-tab">
+            <p class="muted" data-i18n="pricing.tokenTierHelp">按本次请求的总输入 token 选档，单价单位为每百万 token。</p>
+            <div id="price-customer-tier-rows" class="token-tier-rows"></div>
+            <button class="secondary compact add-token-tier" data-price-kind="customer" type="button" data-i18n="pricing.addTokenTier">添加档位</button>
+          </div>
         </section>
         <section class="price-config-section">
           <h3 class="price-formula-control" data-i18n="pricing.costPricing">内部成本配置</h3>
           <div class="price-mode-tabs price-formula-control" role="tablist" data-i18n-aria-label="pricing.costPricing">
             <button id="price-cost-unit-tab" class="price-mode-tab active" data-price-kind="cost" data-price-mode="UNIT" role="tab" aria-selected="true" aria-controls="price-cost-unit-panel" type="button" data-i18n="pricing.unitPricing">按用量单价</button>
             <button id="price-cost-formula-tab" class="price-mode-tab" data-price-kind="cost" data-price-mode="FORMULA" role="tab" aria-selected="false" aria-controls="price-cost-formula-panel" tabindex="-1" type="button" data-i18n="pricing.formulaPricing">按 BillingContext 公式</button>
+            <button id="price-cost-tier-tab" class="price-mode-tab token-tier-tab hidden" data-price-kind="cost" data-price-mode="TOKEN_TIER" role="tab" aria-selected="false" aria-controls="price-cost-tier-panel" tabindex="-1" type="button" data-i18n="pricing.tokenTierPricing">Token 分档</button>
           </div>
           <div id="price-cost-unit-panel" class="price-mode-panel" role="tabpanel" aria-labelledby="price-cost-unit-tab">
             <label><span data-i18n="pricing.internalCostUnitPrice">内部成本单价</span><input name="costUnitPrice" required inputmode="decimal" step="0.0000000001" value="0"></label>
           </div>
           <div id="price-cost-formula-panel" class="price-mode-panel hidden" role="tabpanel" aria-labelledby="price-cost-formula-tab">
             <label><span data-i18n="pricing.costFormula">内部成本计价公式</span><textarea name="costPriceFormula" maxlength="2000" rows="3" spellcheck="false"></textarea></label>
+          </div>
+          <div id="price-cost-tier-panel" class="price-mode-panel hidden" role="tabpanel" aria-labelledby="price-cost-tier-tab">
+            <p class="muted" data-i18n="pricing.tokenTierHelp">按本次请求的总输入 token 选档，单价单位为每百万 token。</p>
+            <div id="price-cost-tier-rows" class="token-tier-rows"></div>
+            <button class="secondary compact add-token-tier" data-price-kind="cost" type="button" data-i18n="pricing.addTokenTier">添加档位</button>
           </div>
         </section>
         <section id="price-formula-test" class="price-formula-test hidden">

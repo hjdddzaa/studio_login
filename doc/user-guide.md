@@ -212,6 +212,7 @@ CSV 每行只绑定一个配置组。需要为同一账号授权多个配置组�
 
 - 按用量单价：金额等于 `Usage × 单价`。
 - 按 BillingContext 公式：直接使用 `BillingContext` 字段路径，公式结果就是该计费项本次产生的客户金额或内部成本，不再乘 `Usage`。
+- 按 Token 档位：仅适用于五个 Seed 语言模型的 `request` 计费项。分别编辑客户价和内部成本的输入 Token 上限、普通输入、音频输入、缓存输入、音频缓存和输出单价（元/百万 Token）。页面将档位规则保存为结构化公式，用户可以继续编辑每档价格。
 
 公式支持数字、字段访问、括号和 `+ - * /` 四则运算。例如：
 
@@ -245,9 +246,9 @@ CSV 每行只绑定一个配置组。需要为同一账号授权多个配置组�
 
 `BillingContext` 由 Studio 的用量上报接口发送。不同算子的字段可能不同，例如语言模型通常包含 `prompt_tokens`、`completion_tokens` 和缓存 Token 明细。配置公式前应使用该计费项的真实上报样本试算，不要假设所有计费项都有同一组字段。
 
-部分自定义语言模型在预估阶段只上报 `request_count`，真实 Token 字段在任务完成后才出现。预估上下文缺少公式字段时，系统使用该价格记录中的单价快照预冻结客户额度和估算成本，实际回调再使用公式结算。实际上下文字段异常时也会回退到任务创建时的单价快照，并记录告警，避免任务长期占用预冻结额度。
+部分自定义语言模型在预估阶段只上报 `request_count`，真实 Token 字段在任务完成后才出现。预估上下文缺少普通公式字段时，系统使用该价格记录中的单价快照预冻结客户额度和估算成本，实际回调再使用公式结算。普通公式的实际上下文字段异常时也会回退到任务创建时的单价快照，并记录告警。方舟 Seed 刊例价公式要求完整的 token 用量；上下文缺失或无效时计费请求会报错，避免按零单价结算。
 
-价格列表在公式模式下只显示“公式计价”徽标。将鼠标悬停在徽标上，或使用键盘将焦点移到徽标，可以查看对应的客户价格公式或内部成本公式。其他计费项继续使用原有的客户单价和内部成本单价界面，不显示公式配置区域。
+价格列表在公式模式下显示“公式计价”或“Token 档位”徽标。将鼠标悬停在徽标上，或使用键盘将焦点移到徽标，可以查看保存的规则。编辑 Seed 价格时可直接调整各档数值，也可以让客户价和内部成本采用不同规则。其他计费项继续使用原有的客户单价和内部成本单价界面。
 
 价格 CSV 模板列为：
 
@@ -255,8 +256,14 @@ CSV 每行只绑定一个配置组。需要为同一账号授权多个配置组�
 billingItemId,unit,customerPricingMode,customerUnitPrice,customerPriceFormula,costPricingMode,costUnitPrice,costPriceFormula
 ```
 
-导入前先在页面选择作用范围。计费项和单位必须与 Studio 返回的计费目录或当前自定义模型目录一致。
-公式列只对支持 BillingContext 公式的计费项生效。`customerPricingMode` 和 `costPricingMode` 可填 `UNIT` 或 `FORMULA`；填 `FORMULA` 时必须填写对应公式，填 `UNIT` 时会清空对应公式并按单价计费。模式列留空但公式列有值时按公式导入；模式列和公式列都留空时保留已有公式配置。旧四列 CSV 仍可导入，只更新单价且不会清空已有公式。
+导入前先在页面选择作用范围。计费项和单位必须与 Studio 返回的计费目录、studio-login 内置价目表或当前自定义模型目录一致。
+公式列只对支持 BillingContext 公式的计费项生效。`customerPricingMode` 和 `costPricingMode` 可填 `UNIT`、`FORMULA` 或 `TOKEN_TIER`；`TOKEN_TIER` 仅适用于五个 Seed `request` 计费项，公式列填 `token_tier:` 开头的 JSON 规则，例如 Seed 2.0 Pro 可填 `token_tier:{"version":1,"basis":"prompt_tokens","tiers":[{"maxInputTokens":256000,"input":"3.2","cached":"0.64","output":"16"}]}`。实际档位须覆盖模型支持的输入长度；Lite/Mini 还需提供 `audioInput` 和 `cachedAudio`。填 `UNIT` 会清空公式并按单价计费。模式列留空但公式列有值时按公式导入；两列都留空时保留已有公式配置。旧四列 CSV 仍可导入，只更新单价且不会清空已有公式。
+
+人民币部署可直接在平台范围导入 `prices/platform-default-cny.csv`，共 94 个计费项。五个 Seed 语言模型各占一行，使用可编辑的 Token 档位规则，按标准在线刊例价和 `BillingContext` 中的 token 明细结算；其余项目使用文件中的固定单价。该规则不包含按小时计费的缓存存储费用，也不适用于低延迟、低优先级或精调推理价。已有配置组价格优先于平台价格。旧的 `ark_seed_...` 公式仍可计价，启动时会将匹配的旧公式升级为可编辑的档位规则。
+
+USD 部署使用 `prices/platform-default-usd.csv`。其中 54 项固定单价来自提供的 USD LAS 价目表；Seedream 4.5、5.0 Lite、5.0 Pro 和四个 Seed 语言模型使用 BytePlus ModelArk 的标准在线刊例价。另有 22 项没有可用 USD 报价，保留 `0/0`，其中包括 BytePlus 尚未公布 USD 刊例价的 Seed 2.1 Pro；使用前需配置实际价格。不要把人民币 CSV 导入 USD 部署。已配置的平台或配置组价格继续优先于内置默认值，如需覆盖已配置的平台价格，应在平台范围导入 USD CSV。
+
+人民币部署在未配置价格时直接使用内置 Seed Token 档位规则。启动时，旧平台级 0/0 Seed 价格记录也会自动升级，无需再导入 CSV 才能启用这五项。任务创建时保存当时的规则快照，之后改价不会影响已有任务。
 
 ## 8. 模型统计
 

@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../src/app.js';
+import { defaultTokenTierFormulaFor } from '../src/ark-seed-pricing.js';
 import { BillingReconciler } from '../src/billing-reconcile.js';
 import { BillingService } from '../src/billing.js';
 import { bootstrapApplication } from '../src/bootstrap.js';
@@ -173,6 +175,46 @@ afterAll(async () => {
 });
 
 describe('studio-login MVP', () => {
+  it('upgrades only legacy zero-priced platform Seed defaults on startup', async () => {
+    const [{ user_id: adminId }] = await database.query<any>(
+      "SELECT user_id FROM users WHERE login_name = 'root' LIMIT 1",
+    );
+    for (const [priceId, scopeType, scopeId, billingItemId, customerPrice, costPrice] of [
+      ['legacy_seed_lite', 'PLATFORM', '*', 'las_llm_seed-2.0-lite', '0', '0'],
+      ['custom_seed_mini', 'PLATFORM', '*', 'las_llm_seed-2.0-mini', '1', '0.5'],
+      ['group_seed_pro', 'CONFIG_GROUP', 'group-test', 'las_llm_seed-2.0-pro', '0', '0'],
+    ]) {
+      await database.execute(
+        `INSERT INTO operator_prices
+          (price_id, scope_type, scope_id, billing_item_id, unit,
+           customer_unit_price, cost_unit_price, enabled, updated_by)
+         VALUES (?, ?, ?, ?, 'request', ?, ?, TRUE, ?)`,
+        [priceId, scopeType, scopeId, billingItemId, customerPrice, costPrice, adminId],
+      );
+    }
+
+    await bootstrapApplication(database, config);
+    await bootstrapApplication(database, config);
+    const rows = await database.query<any>(
+      `SELECT price_id, customer_unit_price, cost_unit_price,
+              customer_price_formula, cost_price_formula
+         FROM operator_prices WHERE price_id IN (?, ?, ?) ORDER BY price_id`,
+      ['legacy_seed_lite', 'custom_seed_mini', 'group_seed_pro'],
+    );
+    expect(rows.find(row => row.price_id === 'legacy_seed_lite')).toMatchObject({
+      customer_unit_price: '0.0000000000',
+      cost_unit_price: '0.0000000000',
+      customer_price_formula: defaultTokenTierFormulaFor('las_llm_seed-2.0-lite'),
+      cost_price_formula: defaultTokenTierFormulaFor('las_llm_seed-2.0-lite'),
+    });
+    for (const priceId of ['custom_seed_mini', 'group_seed_pro']) {
+      expect(rows.find(row => row.price_id === priceId)).toMatchObject({
+        customer_price_formula: null,
+        cost_price_formula: null,
+      });
+    }
+  });
+
   it('requires a fresh one-use captcha before checking the password', async () => {
     const credentials = { accountId: 'acc_demo', loginName: 'root', password: 'StrongPass123!' };
     const missing = await app.inject({ method: 'POST', url: '/api/auth/login', payload: credentials });
@@ -221,6 +263,41 @@ describe('studio-login MVP', () => {
       csv: 'loginName,displayName,password,configGroup,monthlyLimit\nworker,Worker,weakpassword1!,default,100\n',
     } });
     expect(csv.json()).toMatchObject({ total: 1, succeeded: 0, failed: 1 });
+  });
+
+  it('imports built-in price keys omitted from the Core billing catalog', async () => {
+    const cookie = await login('acc_demo', 'root', 'StrongPass123!');
+    expect((await configureStudio(cookie)).statusCode).toBe(200);
+
+    const template = await app.inject({
+      url: '/api/admin/prices/import-template?accountId=acc_demo',
+      headers: { cookie },
+    });
+    expect(template.statusCode, template.body).toBe(200);
+    expect(template.body).toContain('operator_unit,ou,UNIT,0.1,,UNIT,0.1,');
+    expect(template.body).toContain('las_storyboard_rewrite,ou,UNIT,0.025,,UNIT,0.015,');
+
+    const imported = await app.inject({
+      method: 'POST',
+      url: '/api/admin/prices/import',
+      headers: { cookie },
+      payload: {
+        accountId: 'acc_demo',
+        scopeType: 'PLATFORM',
+        scopeId: '*',
+        csv: readFileSync(new URL('../prices/platform-default-cny.csv', import.meta.url), 'utf8'),
+      },
+    });
+    expect(imported.statusCode, imported.body).toBe(200);
+    expect(imported.json()).toMatchObject({ total: 94, succeeded: 94, failed: 0 });
+
+    const list = await app.inject({
+      url: '/api/admin/prices?accountId=acc_demo&scopeType=PLATFORM&scopeId=*',
+      headers: { cookie },
+    });
+    expect(list.statusCode, list.body).toBe(200);
+    expect(list.json().items.find((item: any) => item.billingItemId === 'operator_unit'))
+      .toMatchObject({ configured: true, customerUnitPrice: '0.1000000000' });
   });
 
   it('keeps Date round trips, database clocks and session expiry consistent', async () => {

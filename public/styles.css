@@ -215,11 +215,19 @@ tbody tr:last-child td { border-bottom: 0; }
 .price-config-fields.formula-enabled .price-config-section { padding: 15px; border: 1px solid #e4e0d8; border-radius: 12px; background: #fbfaf8; }
 .price-config-fields:not(.formula-enabled) .price-formula-control { display: none; }
 .price-mode-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 5px; border-radius: 10px; background: #efede8; }
+.price-mode-tabs:has(.token-tier-tab:not(.hidden)) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .price-mode-tab { min-height: 38px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; cursor: pointer; font-size: 13px; font-weight: 700; }
 .price-mode-tab.active { background: white; box-shadow: 0 1px 4px rgba(45,39,31,.12); }
 .price-mode-tab:focus-visible, .formula-price-tooltip:focus-visible { outline: 2px solid #1c1c1a; outline-offset: 2px; }
 .price-mode-panel { display: grid; gap: 13px; }
 .price-mode-panel textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.token-tier-rows { display: grid; gap: 10px; }
+.token-tier-row { display: grid; gap: 10px; padding: 12px; border: 1px solid #e4e0d8; border-radius: 10px; background: #fff; }
+.token-tier-row-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-weight: 700; }
+.token-tier-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.token-tier-fields input { min-width: 0; }
+.token-tier-fields label { font-size: 11px; }
+@media (max-width: 650px) { .token-tier-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .price-formula-test { display: grid; gap: 13px; padding: 15px; border: 1px solid #e4e0d8; border-radius: 12px; background: #fbfaf8; }
 .formula-guidance { display: grid; gap: 9px; }
 .formula-example { display: block; padding: 10px 12px; border-radius: 8px; background: #f0ede7; color: #544f47; font-size: 11px; line-height: 1.55; white-space: normal; overflow-wrap: anywhere; }

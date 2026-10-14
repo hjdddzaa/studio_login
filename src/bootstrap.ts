@@ -2,6 +2,7 @@ import { AuthService } from './auth.js';
 import type { AppConfig } from './config.js';
 import type { Database } from './db.js';
 import { noopLogger, type AppLogger } from './logging.js';
+import { upgradeLegacySeedPlatformPrices } from './platform-default-prices.js';
 import { StudioAdminClient } from './studio-client.js';
 import { StudioConnectionService } from './studio-connections.js';
 
@@ -16,6 +17,11 @@ export async function bootstrapApplication(
     accountId: config.STUDIO_LOGIN_ACCOUNT_ID,
     role: actor.role,
   }, 'Configured administrator is ready');
+  const upgradedSeedPrices = await upgradeLegacySeedPlatformPrices(database, config.STUDIO_LOGIN_CURRENCY);
+  if (upgradedSeedPrices > 0) {
+    logger.info({ event: 'legacy_seed_platform_prices_upgraded', count: upgradedSeedPrices },
+      'Legacy zero-priced Seed platform defaults now use token formulas');
+  }
   if (!config.LAS_STUDIO_BASE_URL || !config.STUDIO_LOGIN_PUBLIC_BASE_URL) {
     logger.warn({
       event: 'bootstrap_studio_registration_skipped',
