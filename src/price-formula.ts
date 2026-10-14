@@ -1,6 +1,7 @@
 import { Decimal } from 'decimal.js';
 
 import { AppError } from './errors.js';
+import { evaluateArkSeedPrice, evaluateTokenTierPrice, isArkSeedPriceFormula, isTokenTierPriceFormula, parseTokenTierRule } from './ark-seed-pricing.js';
 import { message } from './i18n.js';
 
 type TokenType = 'number' | 'identifier' | '+' | '-' | '*' | '/' | '(' | ')' | '.' | 'eof';
@@ -235,14 +236,18 @@ function evaluateNode(node: FormulaNode, context: Record<string, unknown>): Deci
 
 export function validatePriceFormula(formula: string): string {
   const normalized = formula.trim();
-  new FormulaParser(tokenize(normalized)).parse();
+  if (isTokenTierPriceFormula(normalized)) parseTokenTierRule(normalized);
+  else new FormulaParser(tokenize(normalized)).parse();
   return normalized;
 }
 
 export function evaluatePriceFormula(formula: string, billingContext: unknown): Decimal {
   const normalized = formula.trim();
-  const node = new FormulaParser(tokenize(normalized)).parse();
-  const result = evaluateNode(node, parseFormulaBillingContext(billingContext));
+  const result = isArkSeedPriceFormula(normalized)
+    ? evaluateArkSeedPrice(normalized, parseFormulaBillingContext(billingContext))
+    : isTokenTierPriceFormula(normalized)
+      ? evaluateTokenTierPrice(normalized, parseFormulaBillingContext(billingContext))
+    : evaluateNode(new FormulaParser(tokenize(normalized)).parse(), parseFormulaBillingContext(billingContext));
   if (!result.isFinite() || result.isNegative() || result.gt(MAX_AMOUNT)) {
     throw new AppError(message('pricing.formulaResultInvalid'), 400, 'INVALID_PRICE_FORMULA_RESULT');
   }

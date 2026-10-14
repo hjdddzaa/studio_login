@@ -1,5 +1,6 @@
 import type { RowDataPacket } from 'mysql2/promise';
 
+import { ARK_SEED_FORMULA_BY_BILLING_ITEM } from './ark-seed-pricing.js';
 import type { AppConfig } from './config.js';
 import type { Database } from './db.js';
 import { decryptJson } from './security.js';
@@ -40,6 +41,7 @@ export function supportsBillingContextPriceFormula(
   customCatalog: readonly DerivedBillingCatalogItem[],
 ): boolean {
   if (unit !== 'request') return false;
+  if (Object.hasOwn(ARK_SEED_FORMULA_BY_BILLING_ITEM, billingItemId)) return true;
   if (billingItemId.startsWith('las_llm')
       && studioCatalog.some(item => item.billingItemId === billingItemId && item.unit === unit)) {
     return true;

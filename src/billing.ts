@@ -10,6 +10,8 @@ import { noopLogger, type AppLogger } from './logging.js';
 import { currentBillingPeriod } from './quota.js';
 import { decryptJson } from './security.js';
 import { DEFAULT_PRICES, type DefaultPrices } from './deployment.js';
+import { defaultPriceFor, defaultPriceFormulaFor } from './default-price-catalog.js';
+import { isArkSeedPriceFormula, isTokenTierPriceFormula, validateTokenTierForBillingItem } from './ark-seed-pricing.js';
 import type { AppConfig } from './config.js';
 import type { Actor, ResourceConfig } from './types.js';
 import { evaluatePriceFormula, validatePriceFormula } from './price-formula.js';
@@ -196,7 +198,8 @@ function formulaAmountOrFallback(
   try {
     return { value: roundedAmount(evaluatePriceFormula(formula, context)) };
   } catch (error) {
-    if (error instanceof AppError && formulaContextErrorCodes.has(error.code)) {
+    if (error instanceof AppError && formulaContextErrorCodes.has(error.code)
+      && !isArkSeedPriceFormula(formula) && !isTokenTierPriceFormula(formula)) {
       return { value: roundedAmount(fallback), error };
     }
     throw error;
@@ -288,6 +291,7 @@ async function resolvePrice(
   item: BaselineItemInput,
   itemIndex: number,
   defaults: DefaultPrices,
+  currency: 'CNY' | 'USD',
 ): Promise<PriceSnapshot> {
   const rows = await tx.query<PriceRow>(
     `SELECT billing_item_id, unit, customer_unit_price, customer_price_formula,
@@ -302,13 +306,15 @@ async function resolvePrice(
       LIMIT 1`,
     [configGroupId, item.BillingItemId, item.Unit],
   );
+  const builtinPrice = defaultPriceFor(item.BillingItemId, item.Unit, defaults, currency);
+  const builtinFormula = defaultPriceFormulaFor(item.BillingItemId, item.Unit, currency);
   const row = rows[0] ?? {
     billing_item_id: item.BillingItemId,
     unit: item.Unit,
-    customer_unit_price: defaults.customerUnitPrice,
-    customer_price_formula: null,
-    cost_unit_price: defaults.costUnitPrice,
-    cost_price_formula: null,
+    customer_unit_price: builtinPrice.customerUnitPrice,
+    customer_price_formula: builtinFormula,
+    cost_unit_price: builtinPrice.costUnitPrice,
+    cost_price_formula: builtinFormula,
     scope_type: 'BUILTIN_DEFAULT',
   };
   const estimatedUsage = usage(item.Usage);
@@ -452,6 +458,12 @@ export class BillingService {
     const costPriceFormula = input.costPriceFormula?.trim()
       ? validatePriceFormula(input.costPriceFormula)
       : null;
+    if (customerPriceFormula && isTokenTierPriceFormula(customerPriceFormula)) {
+      validateTokenTierForBillingItem(customerPriceFormula, input.billingItemId);
+    }
+    if (costPriceFormula && isTokenTierPriceFormula(costPriceFormula)) {
+      validateTokenTierForBillingItem(costPriceFormula, input.billingItemId);
+    }
     if ((customerPriceFormula || costPriceFormula) && !input.formulaPricingSupported) {
       throw new AppError(
         message('pricing.formulaUnsupportedBillingItem'),
@@ -666,7 +678,11 @@ export class BillingService {
       const configGroupId = user.config_group_id;
 
       const snapshots = await Promise.all(input.Items.map((item, index) =>
-        resolvePrice(tx, configGroupId, item, index, this.config?.defaultPrices ?? DEFAULT_PRICES)));
+        resolvePrice(
+          tx, configGroupId, item, index,
+          this.config?.defaultPrices ?? DEFAULT_PRICES,
+          this.config?.STUDIO_LOGIN_CURRENCY ?? 'CNY',
+        )));
       const estimatedAmount = Decimal.sum(...snapshots.map(item => item.estimatedAmount));
       const estimatedCost = Decimal.sum(...snapshots.map(item => item.estimatedCost));
       const period = currentBillingPeriod(new Date(), this.config?.timeZone);

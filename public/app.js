@@ -88,6 +88,11 @@ const responsesBillingContextExample = {
     reasoning_tokens: 0,
   },
 };
+const tokenTierPrefix = 'token_tier:';
+const tokenTierItems = new Set([
+  'las_llm_seed-2.0-lite', 'las_llm_seed-2.0-mini', 'las_llm_seed-2.0-pro',
+  'las_llm_seed-2.1-pro', 'las_llm_seed-2.1-turbo',
+]);
 const defaultCustomImageRatios = ['16:9', '9:16', '1:1', '4:3'];
 const defaultCustomImageResolutions = ['1K', '1.5K', '2K', '3K'];
 
@@ -1407,9 +1412,16 @@ async function retrySubaccount(userId) {
 
 function formulaPriceCell(formula, detailLabel, tooltipId) {
   if (!formula) return '';
+  const tokenTier = formula.startsWith(tokenTierPrefix);
+  const rule = tokenTier ? parseTokenTierFormula(formula) : null;
+  const detail = rule
+    ? rule.tiers
+      .map(tier => `≤ ${tier.maxInputTokens}: ${t('pricing.tierInputText')} ${tier.input}, ${t('pricing.tierCachedText')} ${tier.cached}, ${t('pricing.tierOutput')} ${tier.output}${tier.audioInput === undefined ? '' : `, ${t('pricing.tierInputAudio')} ${tier.audioInput}, ${t('pricing.tierCachedAudio')} ${tier.cachedAudio}`}`)
+      .join('；')
+    : formula;
   return `<span class="formula-price-tooltip" tabindex="0" aria-describedby="${tooltipId}">
-    <span class="badge neutral">${t('pricing.formulaBadge')}</span>
-    <span id="${tooltipId}" class="formula-price-tooltip-content" role="tooltip"><strong>${escapeHtml(detailLabel)}</strong><code>${escapeHtml(formula)}</code></span>
+    <span class="badge neutral">${t(tokenTier ? 'pricing.tokenTierPricing' : 'pricing.formulaBadge')}</span>
+    <span id="${tooltipId}" class="formula-price-tooltip-content" role="tooltip"><strong>${escapeHtml(detailLabel)}</strong><code>${escapeHtml(detail)}</code></span>
   </span>`;
 }
 
@@ -1482,14 +1494,15 @@ function updatePriceFormulaTestVisibility() {
   const form = $('#price-form');
   const supported = $('#price-config-fields').classList.contains('formula-enabled');
   const hasFormulaMode = ['customer', 'cost'].some(kind =>
-    form.elements[`${kind}PricingMode`].value === 'FORMULA');
+    form.elements[`${kind}PricingMode`].value !== 'UNIT');
   $('#price-formula-test').classList.toggle('hidden', !supported || !hasFormulaMode);
 }
 
 function setPriceMode(kind, mode) {
   const form = $('#price-form');
   const formulaMode = mode === 'FORMULA';
-  const pricingMode = formulaMode ? 'FORMULA' : 'UNIT';
+  const tierMode = mode === 'TOKEN_TIER';
+  const pricingMode = formulaMode ? 'FORMULA' : tierMode ? 'TOKEN_TIER' : 'UNIT';
   form.elements[`${kind}PricingMode`].value = pricingMode;
   $$(`.price-mode-tab[data-price-kind="${kind}"]`).forEach(button => {
     const active = button.dataset.priceMode === pricingMode;
@@ -1497,10 +1510,12 @@ function setPriceMode(kind, mode) {
     button.setAttribute('aria-selected', String(active));
     button.tabIndex = active ? 0 : -1;
   });
-  $(`#price-${kind}-unit-panel`).classList.toggle('hidden', formulaMode);
+  $(`#price-${kind}-unit-panel`).classList.toggle('hidden', pricingMode !== 'UNIT');
   $(`#price-${kind}-formula-panel`).classList.toggle('hidden', !formulaMode);
-  form.elements[`${kind}UnitPrice`].required = !formulaMode;
+  $(`#price-${kind}-tier-panel`).classList.toggle('hidden', !tierMode);
+  form.elements[`${kind}UnitPrice`].required = pricingMode === 'UNIT';
   form.elements[`${kind}PriceFormula`].required = formulaMode;
+  $(`#price-${kind}-tier-rows`).querySelectorAll('input').forEach(input => { input.disabled = !tierMode; });
   clearPriceFormulaValidation();
   updatePriceFormulaTestVisibility();
 }
@@ -1518,10 +1533,18 @@ function priceFormulaSupported(item) {
 
 function setPriceFormulaAvailability(item) {
   const supported = priceFormulaSupported(item);
+  const billingItemId = item?.billingItemId ?? $('#price-form').elements.billingItemId.value.trim();
+  const unit = item?.unit ?? $('#price-form').elements.unit.value.trim();
+  const tierSupported = unit === 'request' && tokenTierItems.has(billingItemId);
   $('#price-config-fields').classList.toggle('formula-enabled', supported);
+  $$('.token-tier-tab').forEach(tab => tab.classList.toggle('hidden', !tierSupported));
   if (!supported) {
     setPriceMode('customer', 'UNIT');
     setPriceMode('cost', 'UNIT');
+  } else if (!tierSupported) {
+    for (const kind of ['customer', 'cost']) {
+      if ($('#price-form').elements[`${kind}PricingMode`].value === 'TOKEN_TIER') setPriceMode(kind, 'FORMULA');
+    }
   }
   updatePriceFormulaTestVisibility();
 }
@@ -1536,6 +1559,63 @@ function priceFormulaExamples(item) {
         formula: chatPriceFormulaExample,
         billingContext: chatBillingContextExample,
       };
+}
+
+function parseTokenTierFormula(formula) {
+  if (!formula?.startsWith(tokenTierPrefix)) return null;
+  try {
+    const rule = JSON.parse(formula.slice(tokenTierPrefix.length));
+    return rule?.version === 1 && Array.isArray(rule.tiers) ? rule : null;
+  } catch {
+    return null;
+  }
+}
+
+const tokenTierFields = [
+  ['maxInputTokens', 'pricing.tierMaxInput'],
+  ['input', 'pricing.tierInputText'],
+  ['audioInput', 'pricing.tierInputAudio'],
+  ['cached', 'pricing.tierCachedText'],
+  ['cachedAudio', 'pricing.tierCachedAudio'],
+  ['output', 'pricing.tierOutput'],
+];
+
+function renderTokenTierRows(kind, tiers) {
+  const container = $(`#price-${kind}-tier-rows`);
+  const audioSupported = ['las_llm_seed-2.0-lite', 'las_llm_seed-2.0-mini']
+    .includes($('#price-form').elements.billingItemId.value.trim());
+  const fields = tokenTierFields.filter(([field]) => audioSupported || !['audioInput', 'cachedAudio'].includes(field));
+  container.innerHTML = tiers.map((tier, index) => `<div class="token-tier-row" data-tier-index="${index}">
+    <div class="token-tier-row-header"><span>#${index + 1}</span><button class="secondary compact remove-token-tier" data-price-kind="${kind}" data-tier-index="${index}" type="button" ${tiers.length === 1 ? 'disabled' : ''}>${t('pricing.removeTokenTier')}</button></div>
+    <div class="token-tier-fields">${fields.map(([field, label]) => `<label><span>${t(label)}</span><input data-tier-field="${field}" type="number" min="${field === 'maxInputTokens' ? '1' : '0'}" step="${field === 'maxInputTokens' ? '1' : 'any'}" value="${escapeHtml(tier[field] ?? '')}" required></label>`).join('')}</div>
+  </div>`).join('');
+  const enabled = $('#price-form').elements[`${kind}PricingMode`].value === 'TOKEN_TIER';
+  container.querySelectorAll('input').forEach(input => { input.disabled = !enabled; });
+}
+
+function readTokenTierRule(kind) {
+  const rows = [...$(`#price-${kind}-tier-rows`).querySelectorAll('.token-tier-row')];
+  const tiers = rows.map(row => {
+    const value = field => row.querySelector(`[data-tier-field="${field}"]`)?.value.trim() ?? '';
+    const tier = {
+      maxInputTokens: Number(value('maxInputTokens')),
+      input: value('input'),
+      cached: value('cached'),
+      output: value('output'),
+    };
+    if (value('audioInput')) tier.audioInput = value('audioInput');
+    if (value('cachedAudio')) tier.cachedAudio = value('cachedAudio');
+    return tier;
+  });
+  return { version: 1, basis: 'prompt_tokens', tiers };
+}
+
+function priceFormulaForMode(kind) {
+  const form = $('#price-form');
+  const mode = form.elements[`${kind}PricingMode`].value;
+  if (mode === 'TOKEN_TIER') return tokenTierPrefix + JSON.stringify(readTokenTierRule(kind));
+  if (mode === 'FORMULA') return form.elements[`${kind}PriceFormula`].value.trim();
+  return null;
 }
 
 function openPriceDialog(item = null) {
@@ -1567,10 +1647,25 @@ function openPriceDialog(item = null) {
     form.elements.costUnitPrice.value = defaultPrices.costUnitPrice;
     form.elements.costPriceFormula.value = examples.formula;
   }
+  for (const kind of ['customer', 'cost']) {
+    const rule = parseTokenTierFormula(item?.[`${kind}PriceFormula`])
+      ?? parseTokenTierFormula(item?.tokenTierDefaultFormula);
+    const firstTier = { maxInputTokens: 32000, input: '0', cached: '0', output: '0' };
+    if (['las_llm_seed-2.0-lite', 'las_llm_seed-2.0-mini'].includes(item?.billingItemId)) {
+      firstTier.audioInput = '0';
+      firstTier.cachedAudio = '0';
+    }
+    renderTokenTierRows(kind, rule?.tiers ?? [firstTier]);
+  }
   setPriceFormulaAvailability(item);
   const formulaSupported = priceFormulaSupported(item);
-  setPriceMode('customer', item?.customerPriceFormula && formulaSupported ? 'FORMULA' : 'UNIT');
-  setPriceMode('cost', item?.costPriceFormula && formulaSupported ? 'FORMULA' : 'UNIT');
+  for (const kind of ['customer', 'cost']) {
+    const formula = item?.[`${kind}PriceFormula`];
+    const mode = formula && formulaSupported
+      ? formula.startsWith(tokenTierPrefix) ? 'TOKEN_TIER' : 'FORMULA'
+      : 'UNIT';
+    setPriceMode(kind, mode);
+  }
   form.elements.billingContextSample.value = JSON.stringify(examples.billingContext, null, 2);
   clearPriceFormulaValidation();
   $('#price-dialog').showModal();
@@ -1592,12 +1687,8 @@ async function validatePriceFormulas() {
         unit: form.elements.unit.value.trim(),
         scopeType: form.elements.scopeId.value === '*' ? 'PLATFORM' : 'CONFIG_GROUP',
         scopeId: form.elements.scopeId.value,
-        customerFormula: form.elements.customerPricingMode.value === 'FORMULA'
-          ? form.elements.customerPriceFormula.value.trim()
-          : undefined,
-        costFormula: form.elements.costPricingMode.value === 'FORMULA'
-          ? form.elements.costPriceFormula.value.trim()
-          : undefined,
+        customerFormula: priceFormulaForMode('customer') ?? undefined,
+        costFormula: priceFormulaForMode('cost') ?? undefined,
         billingContext: form.elements.billingContextSample.value.trim(),
       }),
     });
@@ -1640,14 +1731,10 @@ async function submitPrice(event) {
         unit: form.elements.unit.value.trim(),
         customerPricingMode: form.elements.customerPricingMode.value,
         customerUnitPrice: form.elements.customerUnitPrice.value.trim(),
-        customerPriceFormula: form.elements.customerPricingMode.value === 'FORMULA'
-          ? form.elements.customerPriceFormula.value.trim()
-          : null,
+        customerPriceFormula: priceFormulaForMode('customer'),
         costPricingMode: form.elements.costPricingMode.value,
         costUnitPrice: form.elements.costUnitPrice.value.trim(),
-        costPriceFormula: form.elements.costPricingMode.value === 'FORMULA'
-          ? form.elements.costPriceFormula.value.trim()
-          : null,
+        costPriceFormula: priceFormulaForMode('cost'),
       }),
     });
     form.reset();
@@ -2042,7 +2129,7 @@ $('#price-form').addEventListener('submit', submitPrice);
 $$('.price-mode-tab').forEach(button => button.addEventListener('click', () => setPriceMode(button.dataset.priceKind, button.dataset.priceMode)));
 $$('.price-mode-tabs').forEach(tablist => tablist.addEventListener('keydown', event => {
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
-  const tabs = [...tablist.querySelectorAll('.price-mode-tab')];
+  const tabs = [...tablist.querySelectorAll('.price-mode-tab:not(.hidden)')];
   const current = Math.max(0, tabs.indexOf(document.activeElement));
   const next = event.key === 'Home'
     ? 0
@@ -2053,6 +2140,27 @@ $$('.price-mode-tabs').forEach(tablist => tablist.addEventListener('keydown', ev
   tabs[next].focus();
   tabs[next].click();
 }));
+$$('.add-token-tier').forEach(button => button.addEventListener('click', () => {
+  const kind = button.dataset.priceKind;
+  const tiers = readTokenTierRule(kind).tiers;
+  if (tiers.length >= 10) return;
+  tiers.push({ maxInputTokens: (tiers.at(-1)?.maxInputTokens || 0) + 32000, input: '', cached: '', output: '' });
+  renderTokenTierRows(kind, tiers);
+  clearPriceFormulaValidation();
+}));
+$('#price-form').addEventListener('click', event => {
+  const button = event.target.closest('.remove-token-tier');
+  if (!button) return;
+  const kind = button.dataset.priceKind;
+  const tiers = readTokenTierRule(kind).tiers;
+  if (tiers.length <= 1) return;
+  tiers.splice(Number(button.dataset.tierIndex), 1);
+  renderTokenTierRows(kind, tiers);
+  clearPriceFormulaValidation();
+});
+$('#price-form').addEventListener('input', event => {
+  if (event.target.matches('[data-tier-field]')) clearPriceFormulaValidation();
+});
 $('#validate-price-formula').addEventListener('click', validatePriceFormulas);
 $('#price-form').elements.billingItemId.addEventListener('input', () => setPriceFormulaAvailability(null));
 $('#price-form').elements.unit.addEventListener('input', () => setPriceFormulaAvailability(null));

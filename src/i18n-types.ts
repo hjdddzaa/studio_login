@@ -317,6 +317,18 @@ export interface MessageParameters {
   'pricing.costPricing': Record<string, never>;
   'pricing.unitPricing': Record<string, never>;
   'pricing.formulaPricing': Record<string, never>;
+  'pricing.tokenTierPricing': Record<string, never>;
+  'pricing.tokenTierHelp': Record<string, never>;
+  'pricing.addTokenTier': Record<string, never>;
+  'pricing.removeTokenTier': Record<string, never>;
+  'pricing.tierMaxInput': Record<string, never>;
+  'pricing.tierInputText': Record<string, never>;
+  'pricing.tierInputAudio': Record<string, never>;
+  'pricing.tierCachedText': Record<string, never>;
+  'pricing.tierCachedAudio': Record<string, never>;
+  'pricing.tierOutput': Record<string, never>;
+  'pricing.tokenTierInvalid': Record<string, never>;
+  'pricing.tokenTierUnsupported': Record<string, never>;
   'pricing.formulaBadge': Record<string, never>;
   'pricing.formula': Record<string, never>;
   'pricing.customerFormula': Record<string, never>;

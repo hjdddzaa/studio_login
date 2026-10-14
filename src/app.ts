@@ -30,6 +30,7 @@ import {
 } from './custom-billing-items.js';
 import { importCsvRows, parseCsvRecords } from './csv-import.js';
 import type { Database } from './db.js';
+import { BUILTIN_PRICE_ITEMS, defaultPriceFor, defaultPriceFormulaFor } from './default-price-catalog.js';
 import { AppError } from './errors.js';
 import { createAppLogger } from './logging.js';
 import { ModelUsageService } from './model-usage.js';
@@ -39,6 +40,7 @@ import { StudioAdminClient } from './studio-client.js';
 import { StudioConnectionService } from './studio-connections.js';
 import { TicketService } from './tickets.js';
 import { evaluatePriceFormula } from './price-formula.js';
+import { defaultTokenTierFormulaFor, isTokenTierPriceFormula, validateTokenTierForBillingItem } from './ark-seed-pricing.js';
 
 const loginSchema = z.object({
   accountId: z.string().min(1).max(64).optional(),
@@ -87,7 +89,7 @@ const optionalPricingMode = z.preprocess(value => {
   if (value === undefined || value === null) return undefined;
   const normalized = String(value).trim().toUpperCase();
   return normalized || undefined;
-}, z.enum(['UNIT', 'FORMULA']).optional());
+}, z.enum(['UNIT', 'FORMULA', 'TOKEN_TIER']).optional());
 
 const optionalAmount = nonNegativeAmount.nullable().optional()
   .transform(value => value === null || value === undefined ? null : String(value));
@@ -158,21 +160,21 @@ const priceSchema = z.object({
   scopeId: z.string().min(1).max(64),
   billingItemId: z.string().min(1).max(128),
   unit: z.string().min(1).max(32),
-  customerPricingMode: z.enum(['UNIT', 'FORMULA']).default('UNIT'),
-  costPricingMode: z.enum(['UNIT', 'FORMULA']).default('UNIT'),
+  customerPricingMode: z.enum(['UNIT', 'FORMULA', 'TOKEN_TIER']).default('UNIT'),
+  costPricingMode: z.enum(['UNIT', 'FORMULA', 'TOKEN_TIER']).default('UNIT'),
   customerUnitPrice: priceAmount,
   customerPriceFormula: z.string().max(2000).nullable().optional(),
   costUnitPrice: priceAmount,
   costPriceFormula: z.string().max(2000).nullable().optional(),
 }).superRefine((value, context) => {
-  if (value.customerPricingMode === 'FORMULA' && !value.customerPriceFormula?.trim()) {
+  if (value.customerPricingMode !== 'UNIT' && !value.customerPriceFormula?.trim()) {
     context.addIssue({
       code: 'custom',
       path: ['customerPriceFormula'],
       message: 'pricing.formulaRequired',
     });
   }
-  if (value.costPricingMode === 'FORMULA' && !value.costPriceFormula?.trim()) {
+  if (value.costPricingMode !== 'UNIT' && !value.costPriceFormula?.trim()) {
     context.addIssue({
       code: 'custom',
       path: ['costPriceFormula'],
@@ -226,14 +228,17 @@ function csvCell(value: unknown): string {
 }
 
 function importedPriceFormula(
-  mode: 'UNIT' | 'FORMULA' | undefined,
+  mode: 'UNIT' | 'FORMULA' | 'TOKEN_TIER' | undefined,
   formula: string | undefined,
   existingFormula: string | null | undefined,
 ): string | null | undefined {
   const normalizedFormula = formula?.trim();
-  if (mode === 'FORMULA' || (!mode && normalizedFormula)) {
+  if (mode === 'FORMULA' || mode === 'TOKEN_TIER' || (!mode && normalizedFormula)) {
     if (!normalizedFormula) {
       throw new AppError(message('pricing.formulaRequired'), 400, 'PRICE_FORMULA_REQUIRED');
+    }
+    if (mode === 'TOKEN_TIER' && !isTokenTierPriceFormula(normalizedFormula)) {
+      throw new AppError(message('pricing.tokenTierInvalid'), 400, 'INVALID_TOKEN_TIER_RULE');
     }
     return normalizedFormula;
   }
@@ -841,8 +846,16 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (actor.role !== 'SYSTEM_ADMIN') {
       throw new AppError(message('pricing.systemAdminRequired'), 403, 'SYSTEM_ADMIN_REQUIRED');
     }
-    const formulaRequested = body.customerPricingMode === 'FORMULA'
-      || body.costPricingMode === 'FORMULA';
+    const formulaRequested = body.customerPricingMode !== 'UNIT'
+      || body.costPricingMode !== 'UNIT';
+    if ((body.customerPricingMode === 'TOKEN_TIER' || body.costPricingMode === 'TOKEN_TIER')
+      && (body.unit !== 'request' || !defaultTokenTierFormulaFor(body.billingItemId))) {
+      throw new AppError(message('pricing.tokenTierUnsupported'), 400, 'PRICE_FORMULA_UNSUPPORTED_BILLING_ITEM');
+    }
+    if ((body.customerPricingMode === 'TOKEN_TIER' && !isTokenTierPriceFormula(body.customerPriceFormula ?? ''))
+      || (body.costPricingMode === 'TOKEN_TIER' && !isTokenTierPriceFormula(body.costPriceFormula ?? ''))) {
+      throw new AppError(message('pricing.tokenTierInvalid'), 400, 'INVALID_TOKEN_TIER_RULE');
+    }
     const [catalog, customCatalog] = formulaRequested
       ? await Promise.all([
           studioConnections.billingCatalog(actor.accountId),
@@ -858,10 +871,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     );
     await billing.upsertPrice({
       ...body,
-      customerPriceFormula: body.customerPricingMode === 'FORMULA'
+      customerPriceFormula: body.customerPricingMode !== 'UNIT'
         ? body.customerPriceFormula
         : null,
-      costPriceFormula: body.costPricingMode === 'FORMULA'
+      costPriceFormula: body.costPricingMode !== 'UNIT'
         ? body.costPriceFormula
         : null,
       formulaPricingSupported,
@@ -907,6 +920,14 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         'PRICE_FORMULA_UNSUPPORTED_BILLING_ITEM',
       );
     }
+    for (const formula of [body.customerFormula, body.costFormula]) {
+      if (formula?.trim() && isTokenTierPriceFormula(formula.trim())) {
+        if (body.unit !== 'request') {
+          throw new AppError(message('pricing.tokenTierUnsupported'), 400, 'PRICE_FORMULA_UNSUPPORTED_BILLING_ITEM');
+        }
+        validateTokenTierForBillingItem(formula.trim(), body.billingItemId);
+      }
+    }
     const customerAmount = body.customerFormula?.trim()
       ? evaluatePriceFormula(body.customerFormula, body.billingContext).toFixed(6)
       : undefined;
@@ -945,6 +966,14 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       item,
     ]));
     const mergedCatalog = new Map<string, Record<string, unknown>>();
+    for (const item of BUILTIN_PRICE_ITEMS) {
+      mergedCatalog.set(`${item.billingItemId}\0${item.unit}`, {
+        ...item,
+        operatorIds: [],
+        connectionNames: [],
+        custom: false,
+      });
+    }
     for (const item of catalog) {
       mergedCatalog.set(`${item.billingItemId}\0${item.unit}`, { ...item, custom: false });
     }
@@ -956,6 +985,17 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       || String(left.unit).localeCompare(String(right.unit)));
     const catalogKeys = new Set(catalogItems.map(item => `${item.billingItemId}\0${item.unit}`));
     const items: Array<Record<string, unknown>> = catalogItems.flatMap(catalogItem => {
+      const builtinPrice = defaultPriceFor(
+        String(catalogItem.billingItemId),
+        String(catalogItem.unit),
+        config.defaultPrices,
+        config.STUDIO_LOGIN_CURRENCY,
+      );
+      const builtinFormula = defaultPriceFormulaFor(
+        String(catalogItem.billingItemId),
+        String(catalogItem.unit),
+        config.STUDIO_LOGIN_CURRENCY,
+      );
       const matches = configured.filter(item => item.billingItemId === catalogItem.billingItemId
         && item.unit === catalogItem.unit);
       const inherited = platformByItem.get(`${catalogItem.billingItemId}\0${catalogItem.unit}`);
@@ -969,10 +1009,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         scopeName: null,
         billingItemId: catalogItem.billingItemId,
         unit: catalogItem.unit,
-        customerUnitPrice: config.defaultPrices.customerUnitPrice,
-        customerPriceFormula: null,
-        costUnitPrice: config.defaultPrices.costUnitPrice,
-        costPriceFormula: null,
+        customerUnitPrice: builtinPrice.customerUnitPrice,
+        customerPriceFormula: builtinFormula,
+        costUnitPrice: builtinPrice.costUnitPrice,
+        costPriceFormula: builtinFormula,
         enabled: false,
         configured: false,
         builtinDefault: true,
@@ -996,6 +1036,9 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     }
     const visibleItems: Array<Record<string, unknown>> = items.map(item => ({
       ...item,
+      tokenTierDefaultFormula: defaultTokenTierFormulaFor(
+        String(item.billingItemId), config.STUDIO_LOGIN_CURRENCY,
+      ),
       formulaPricingSupported: supportsBillingContextPriceFormula(
         String(item.billingItemId),
         String(item.unit),
@@ -1025,6 +1068,14 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       derivedCustomBillingCatalog(database, config, query.accountId),
     ]);
     const merged = new Map<string, Record<string, unknown>>();
+    for (const item of BUILTIN_PRICE_ITEMS) {
+      merged.set(`${item.billingItemId}\0${item.unit}`, {
+        ...item,
+        operatorIds: [],
+        connectionNames: [],
+        custom: false,
+      });
+    }
     for (const item of catalog) merged.set(`${item.billingItemId}\0${item.unit}`, { ...item, custom: false });
     for (const item of customCatalog) merged.set(`${item.billingItemId}\0${item.unit}`, { ...item });
     return {
@@ -1086,21 +1137,30 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       return [`${price.billingItemId}\0${price.unit}`, price];
     }));
     const merged = new Map<string, { billingItemId: string; unit: string }>();
+    for (const item of BUILTIN_PRICE_ITEMS) merged.set(`${item.billingItemId}\0${item.unit}`, item);
     for (const item of catalog) merged.set(`${item.billingItemId}\0${item.unit}`, item);
     for (const item of scopedCustomCatalog) merged.set(`${item.billingItemId}\0${item.unit}`, item);
     for (const item of configured.values()) merged.set(`${item.billingItemId}\0${item.unit}`, item);
     const rows = [...merged.values()]
       .map(item => {
         const price = configured.get(`${item.billingItemId}\0${item.unit}`);
+        const builtinPrice = defaultPriceFor(
+          item.billingItemId, item.unit, config.defaultPrices, config.STUDIO_LOGIN_CURRENCY,
+        );
+        const builtinFormula = defaultPriceFormulaFor(
+          item.billingItemId, item.unit, config.STUDIO_LOGIN_CURRENCY,
+        );
+        const customerFormula = price ? price.customerPriceFormula : builtinFormula;
+        const costFormula = price ? price.costPriceFormula : builtinFormula;
         return [
           item.billingItemId,
           item.unit,
-          price?.customerPriceFormula ? 'FORMULA' : 'UNIT',
-          price?.customerUnitPrice ?? config.defaultPrices.customerUnitPrice,
-          price?.customerPriceFormula ?? '',
-          price?.costPriceFormula ? 'FORMULA' : 'UNIT',
-          price?.costUnitPrice ?? config.defaultPrices.costUnitPrice,
-          price?.costPriceFormula ?? '',
+          customerFormula ? isTokenTierPriceFormula(customerFormula) ? 'TOKEN_TIER' : 'FORMULA' : 'UNIT',
+          price?.customerUnitPrice ?? builtinPrice.customerUnitPrice,
+          customerFormula ?? '',
+          costFormula ? isTokenTierPriceFormula(costFormula) ? 'TOKEN_TIER' : 'FORMULA' : 'UNIT',
+          price?.costUnitPrice ?? builtinPrice.costUnitPrice,
+          costFormula ?? '',
         ].map(csvCell).join(',');
       })
       .join('\n');
@@ -1129,6 +1189,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     ]);
     const scopedCustomCatalog = customBillingCatalogForScope(customCatalog, body.scopeType, body.scopeId);
     const supported = new Set([
+      ...BUILTIN_PRICE_ITEMS.map(item => `${item.billingItemId}\0${item.unit}`),
       ...catalog.map(item => `${item.billingItemId}\0${item.unit}`),
       ...scopedCustomCatalog.map(item => `${item.billingItemId}\0${item.unit}`),
     ]);
@@ -1147,6 +1208,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       const key = `${parsed.billingItemId}\0${parsed.unit}`;
       if (!supported.has(key)) {
         return message('csv.unknownBillingItemSkipped');
+      }
+      if ((parsed.customerPricingMode === 'TOKEN_TIER' || parsed.costPricingMode === 'TOKEN_TIER')
+        && (parsed.unit !== 'request' || !defaultTokenTierFormulaFor(parsed.billingItemId))) {
+        throw new AppError(message('pricing.tokenTierUnsupported'), 400, 'PRICE_FORMULA_UNSUPPORTED_BILLING_ITEM');
       }
       const existing = configured.get(key);
       const formulaPricingSupported = supportsBillingContextPriceFormula(

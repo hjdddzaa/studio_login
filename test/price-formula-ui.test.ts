@@ -21,12 +21,12 @@ describe('price formula UI contract', () => {
   });
 
   it('uses the dual-formula API contract for validation and saving', () => {
-    expect(appSource).toContain('customerFormula: form.elements.customerPricingMode.value');
-    expect(appSource).toContain('costFormula: form.elements.costPricingMode.value');
+    expect(appSource).toContain("customerFormula: priceFormulaForMode('customer')");
+    expect(appSource).toContain("costFormula: priceFormulaForMode('cost')");
     expect(appSource).toContain('customerPricingMode: form.elements.customerPricingMode.value');
-    expect(appSource).toContain('customerPriceFormula: form.elements.customerPricingMode.value');
+    expect(appSource).toContain("customerPriceFormula: priceFormulaForMode('customer')");
     expect(appSource).toContain('costPricingMode: form.elements.costPricingMode.value');
-    expect(appSource).toContain('costPriceFormula: form.elements.costPricingMode.value');
+    expect(appSource).toContain("costPriceFormula: priceFormulaForMode('cost')");
     expect(appSource).toContain('result.customerAmount');
     expect(appSource).toContain('result.costAmount');
   });
@@ -49,7 +49,7 @@ describe('price formula UI contract', () => {
   });
 
   it('hides formula text in the table until its badge receives hover or focus', () => {
-    expect(appSource).toContain('class="badge neutral">${t(\'pricing.formulaBadge\')}</span>');
+    expect(appSource).toContain("t(tokenTier ? 'pricing.tokenTierPricing' : 'pricing.formulaBadge')");
     expect(appSource).toContain('class="formula-price-tooltip-content" role="tooltip"');
     expect(appSource).toContain('formulaPriceCell(item.customerPriceFormula');
     expect(appSource).toContain('formulaPriceCell(item.costPriceFormula');
@@ -57,6 +57,13 @@ describe('price formula UI contract', () => {
     expect(styles).toMatch(
       /\.formula-price-tooltip:hover \.formula-price-tooltip-content,\s*\.formula-price-tooltip:focus-visible \.formula-price-tooltip-content\s*\{[^}]*opacity:\s*1;[^}]*visibility:\s*visible;/s,
     );
+  });
+
+  it('offers editable customer and cost token tiers', () => {
+    expect(html).toContain('id="price-customer-tier-tab"');
+    expect(html).toContain('id="price-cost-tier-tab"');
+    expect(appSource).toContain('function renderTokenTierRows(kind, tiers)');
+    expect(appSource).toContain('function readTokenTierRule(kind)');
   });
 
   it('does not render a formula support-range notice for ordinary price configuration', () => {
